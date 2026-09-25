@@ -255,7 +255,7 @@ export default function App() {
 
   // Analyze Frame with Strict Anti-Repetition
   const handleAnalyzeFrame = useCallback(
-    async (imageBase64: string, explicitQuery: string = '') => {
+    async (imageBase64: string, explicitQuery: string = '', isManual: boolean = false) => {
       if (!imageBase64 || isAnalyzingRef.current || isPaused) return;
 
       lastFrameBase64Ref.current = imageBase64;
@@ -281,8 +281,7 @@ export default function App() {
 
         setLastAnalysis(analysis);
 
-        // Anti-Repetition & Audio Fatigue Protection:
-        // Rule: Never repeat static obstacles in PASSIVE mode!
+        // Anti-Repetition & Audio Fatigue Protection
         const isSameMessage = analysis.ttsMessage === lastSpokenTextRef.current;
         const timeSinceLastSpoken = Date.now() - lastSpokenTimeRef.current;
         const isAlreadySpeaking = speechManager.getSpeakingState();
@@ -294,24 +293,22 @@ export default function App() {
 
         let shouldSpeakNow = false;
 
-        if (explicitQuery || currentMode === 'ACTIVE') {
-          // Explicit user query in Active mode: always deliver answer
+        if (explicitQuery || currentMode === 'ACTIVE' || isManual) {
+          // Explicit query OR manual user trigger (Spacebar / Click / Scan button): ALWAYS speak!
           shouldSpeakNow = Boolean(analysis.ttsMessage);
         } else if (isSpecialChannel) {
-          // Specialized channel: speak only if new detection or 8+ seconds passed
-          shouldSpeakNow = !isSameMessage || timeSinceLastSpoken > 8000;
-        } else if (currentMode === 'NAVIGATION') {
-          // Navigation mode: speak course directions if changed or 7+ seconds passed
+          // Specialized channel: speak only if new detection or 7+ seconds passed
           shouldSpeakNow = !isSameMessage || timeSinceLastSpoken > 7000;
+        } else if (currentMode === 'NAVIGATION') {
+          // Navigation mode: speak course directions if changed or 6+ seconds passed
+          shouldSpeakNow = !isSameMessage || timeSinceLastSpoken > 6000;
         } else {
-          // PASSIVE MODE: Silent by default to prevent audio fatigue!
-          // Speak ONLY on:
-          // 1. Tier 1 Critical emergency (stairs down, collision <1.5m)
-          // 2. Tier 2 Warning (<2.0m) ONLY IF it is a new obstacle or 10+ seconds elapsed
-          if (analysis.hazardLevel === 1 && analysis.distanceMeters <= 1.5) {
+          // PASSIVE MODE: Background Guardian
+          // Speak if obstacle on path within 2.8m, or stairs/dropoff (<1.8m)
+          if (analysis.hazardLevel === 1 && analysis.distanceMeters <= 1.8) {
             shouldSpeakNow = !isSameMessage || timeSinceLastSpoken > 4000;
-          } else if (analysis.hazardLevel === 2 && analysis.distanceMeters <= 2.0) {
-            shouldSpeakNow = !isSameMessage || timeSinceLastSpoken > 10000;
+          } else if (analysis.hazardLevel === 2 && analysis.distanceMeters <= 2.8) {
+            shouldSpeakNow = !isSameMessage || timeSinceLastSpoken > 8000;
           } else {
             shouldSpeakNow = false;
           }
@@ -326,7 +323,11 @@ export default function App() {
           executeSpeechOutput(analysis.ttsMessage, analysis.hazardLevel, analysis.clockDirection);
         }
       } catch (err: any) {
-        if (err.message && !err.message.includes('superseded')) {
+        if (
+          err.message &&
+          !err.message.includes('superseded') &&
+          !err.message.includes('in progress')
+        ) {
           console.warn('Frame analysis notice:', err.message);
         }
       } finally {
@@ -414,7 +415,7 @@ export default function App() {
         if (speechManager.getSpeakingState()) {
           handleStopSpeech();
         } else if (lastFrameBase64Ref.current) {
-          handleAnalyzeFrame(lastFrameBase64Ref.current);
+          handleAnalyzeFrame(lastFrameBase64Ref.current, '', true);
         } else {
           handleReplayCurrent();
         }
@@ -560,7 +561,7 @@ export default function App() {
           {/* Camera Viewport (7 cols) */}
           <div className="lg:col-span-7">
             <CameraStream
-              onCaptureFrame={(base64) => handleAnalyzeFrame(base64)}
+              onCaptureFrame={(base64, isManual) => handleAnalyzeFrame(base64, '', Boolean(isManual))}
               isAnalyzing={isAnalyzing}
               detectedObjects={lastAnalysis.detectedObjects || []}
               hazardLevel={lastAnalysis.hazardLevel}

@@ -22,25 +22,21 @@ export interface AnalyzeResponse {
   note?: string;
 }
 
-let activeAbortController: AbortController | null = null;
+let isRequestInProgress = false;
 
 export async function analyzeScene(payload: AnalyzePayload): Promise<{ analysis: SpatialAnalysis; hasKey?: boolean }> {
-  // Abort previous frame request to prevent race conditions & lag
-  if (activeAbortController) {
-    try {
-      activeAbortController.abort();
-    } catch {
-      // ignore
-    }
+  // Concurrency guard: Do not interrupt an in-flight analysis, let it complete
+  if (isRequestInProgress) {
+    throw new Error('Analysis in progress');
   }
 
+  isRequestInProgress = true;
   const controller = new AbortController();
-  activeAbortController = controller;
 
-  // 12-second safety timeout
+  // 15-second safety timeout
   const timeoutId = setTimeout(() => {
     controller.abort();
-  }, 12000);
+  }, 15000);
 
   try {
     const response = await fetch('/api/analyze', {
@@ -66,13 +62,8 @@ export async function analyzeScene(payload: AnalyzePayload): Promise<{ analysis:
     };
   } catch (err: any) {
     clearTimeout(timeoutId);
-    if (err.name === 'AbortError') {
-      throw new Error('Request superseded by newer frame');
-    }
     throw err;
   } finally {
-    if (activeAbortController === controller) {
-      activeAbortController = null;
-    }
+    isRequestInProgress = false;
   }
 }

@@ -37,9 +37,7 @@ function getGeminiClient(customApiKey?: string): GoogleGenAI | null {
 }
 
 /* ==========================================================================
-   2. TTS TEXT SANITIZER & AUDIO FORMATTER
-   Strict speech sanitizer: plain spoken words, no markdown, no asterisks,
-   no bullet points, no conversational filler ("I see", "There is").
+   2. TTS TEXT SANITIZER & SPATIAL NORMALIZERS
    ========================================================================== */
 
 export function sanitizeForTts(raw: string, lang: 'en' | 'ru' = 'ru'): string {
@@ -72,6 +70,37 @@ export function sanitizeForTts(raw: string, lang: 'en' | 'ru' = 'ru'): string {
   }
 
   return cleaned;
+}
+
+export function normalizeClock(val: string | number | undefined): string {
+  if (!val) return '12';
+  const str = String(val).trim();
+  const match = str.match(/\b(1[0-2]|[1-9])\b/);
+  return match ? match[1] : '12';
+}
+
+export function normalizeBox(box: any): [number, number, number, number] {
+  if (!Array.isArray(box) || box.length !== 4) return [0, 0, 0, 0];
+  let [ymin, xmin, ymax, xmax] = box.map(Number);
+  if (isNaN(ymin)) ymin = 0;
+  if (isNaN(xmin)) xmin = 0;
+  if (isNaN(ymax)) ymax = 0;
+  if (isNaN(xmax)) xmax = 0;
+
+  // Handle 0.0 - 1.0 normalization fallback
+  if (ymax <= 1.05 && xmax <= 1.05 && (ymin > 0 || xmin > 0 || ymax > 0 || xmax > 0)) {
+    ymin = Math.round(ymin * 1000);
+    xmin = Math.round(xmin * 1000);
+    ymax = Math.round(ymax * 1000);
+    xmax = Math.round(xmax * 1000);
+  }
+
+  return [
+    Math.max(0, Math.min(1000, Math.round(ymin))),
+    Math.max(0, Math.min(1000, Math.round(xmin))),
+    Math.max(0, Math.min(1000, Math.round(ymax))),
+    Math.max(0, Math.min(1000, Math.round(xmax))),
+  ];
 }
 
 /* ==========================================================================
@@ -328,10 +357,10 @@ function createSafetyFallback(
 }
 
 /* ==========================================================================
-   5. MULTI-MODEL INFERENCE CASCADE
+   5. MULTI-MODEL INFERENCE CASCADE (LITE FIRST FOR SPEED & RELIABILITY)
    ========================================================================== */
 
-const CANDIDATE_MODELS = ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+const CANDIDATE_MODELS = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
 
 async function executeGeminiWithRetry(
   aiClient: GoogleGenAI,
@@ -366,10 +395,10 @@ async function executeGeminiWithRetry(
         errMsg.includes('503') ||
         errMsg.includes('high demand') ||
         errMsg.includes('429') ||
-        errMsg.includes('UNAVAILABLE')
+        errMsg.includes('UNAVAILABLE') ||
+        errMsg.includes('RESOURCE_EXHAUSTED')
       ) {
-        console.warn(`[VisionAssist AI] Model ${model} busy/unavailable, trying next...`);
-        await new Promise((r) => setTimeout(r, 350));
+        console.warn(`[VisionAssist AI] Model ${model} unavailable (${errMsg.slice(0, 50)}), cascading...`);
         continue;
       }
       break;
@@ -406,7 +435,6 @@ async function handleAnalyze(req: Request, res: Response) {
 
     const aiClient = getGeminiClient(apiKey);
     if (!aiClient) {
-      // Key missing: Inform cleanly ONCE without spamming loop or inventing fake obstacles
       return res.json({
         success: true,
         hasKey: false,
@@ -416,7 +444,7 @@ async function handleAnalyze(req: Request, res: Response) {
             : 'Assistant ready. Please add Gemini API key in settings or Vercel.',
           hazardLevel: 0,
           hazardType: 'READY_AWAITING_KEY',
-          clockDirection: 'NONE',
+          clockDirection: '12',
           distanceMeters: 0,
           distanceText: isRu ? 'чисто' : 'clear',
           verticalZone: 'GENERAL',
@@ -530,8 +558,21 @@ async function handleAnalyze(req: Request, res: Response) {
       parsed.ttsMessage = sanitizeForTts(parsed.ttsMessage, lang);
     }
 
-    // Ensure detectedObjects is always an array
-    if (!Array.isArray(parsed.detectedObjects)) {
+    // Normalize clockDirection, distance, and bounding boxes
+    parsed.clockDirection = normalizeClock(parsed.clockDirection);
+    parsed.distanceMeters = Number(parsed.distanceMeters) || 0;
+    parsed.hazardLevel = Number(parsed.hazardLevel) || 0;
+
+    if (parsed.detectedObjects && Array.isArray(parsed.detectedObjects)) {
+      parsed.detectedObjects = parsed.detectedObjects.map((obj: any) => ({
+        label: String(obj.label || 'объект'),
+        confidence: Number(obj.confidence) || 0.9,
+        box2d: normalizeBox(obj.box2d),
+        clockDirection: normalizeClock(obj.clockDirection),
+        distance: String(obj.distance || 'один метр'),
+        hazardLevel: Number(obj.hazardLevel) || 3,
+      }));
+    } else {
       parsed.detectedObjects = [];
     }
 
@@ -641,7 +682,6 @@ app.post(['/api/analyze', '/analyze'], handleAnalyze);
 app.post(['/api/tts', '/tts'], handleTts);
 app.get(['/api/health', '/health', '/api'], handleHealth);
 
-// Universal fallback middleware for any rewritten paths
 app.use((req: Request, res: Response, next: any) => {
   if (req.method === 'POST' && req.url.includes('analyze')) {
     return handleAnalyze(req, res);

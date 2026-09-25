@@ -15,7 +15,7 @@ import { DetectedObject } from '../types/assistant';
 import { playHazardTone, triggerHapticFeedback } from '../services/audioEngine';
 
 interface CameraStreamProps {
-  onCaptureFrame: (base64Image: string) => void;
+  onCaptureFrame: (base64Image: string, isManual?: boolean) => void;
   isAnalyzing: boolean;
   detectedObjects: DetectedObject[];
   hazardLevel: number;
@@ -299,8 +299,8 @@ export const CameraStream: React.FC<CameraStreamProps> = ({
    * - Computes motion delta to trigger fast auto-scan when camera moves
    */
   const captureFrame = useCallback(
-    (force: boolean = false) => {
-      if (isAnalyzing || !canvasRef.current) return;
+    (isManual: boolean = false) => {
+      if ((isAnalyzing && !isManual) || !canvasRef.current) return;
 
       if (isCameraActive && videoRef.current) {
         const video = videoRef.current;
@@ -370,12 +370,12 @@ export const CameraStream: React.FC<CameraStreamProps> = ({
         // High fidelity JPEG output (0.85 quality)
         const base64 = canvas.toDataURL('image/jpeg', 0.85);
         lastScanTimestampRef.current = Date.now();
-        onCaptureFrame(base64);
+        onCaptureFrame(base64, isManual);
       } else if (isDemoActive && canvasRef.current) {
         const canvas = canvasRef.current;
         const base64 = canvas.toDataURL('image/jpeg', 0.85);
         lastScanTimestampRef.current = Date.now();
-        onCaptureFrame(base64);
+        onCaptureFrame(base64, isManual);
       }
     },
     [isAnalyzing, isCameraActive, isDemoActive, onCaptureFrame, onLuminanceChange]
@@ -485,19 +485,27 @@ export const CameraStream: React.FC<CameraStreamProps> = ({
     reader.readAsDataURL(file);
   };
 
-  // Adaptive Auto-Scan Timer
+  // Completion-Driven Adaptive Auto-Scan Loop
   useEffect(() => {
-    if ((isCameraActive || isDemoActive) && autoScanInterval > 0) {
-      autoScanTimerRef.current = setInterval(() => {
-        captureFrame();
-      }, autoScanInterval * 1000);
+    if (!isCameraActive && !isDemoActive) return;
+
+    let timer: any = null;
+    let isMounted = true;
+
+    // When NOT analyzing, schedule next capture with a smooth 700ms cooldown
+    if (!isAnalyzing) {
+      timer = setTimeout(() => {
+        if (isMounted && (isCameraActive || isDemoActive)) {
+          captureFrame(false);
+        }
+      }, 700);
     }
+
     return () => {
-      if (autoScanTimerRef.current) {
-        clearInterval(autoScanTimerRef.current);
-      }
+      isMounted = false;
+      if (timer) clearTimeout(timer);
     };
-  }, [isCameraActive, isDemoActive, autoScanInterval, captureFrame]);
+  }, [isCameraActive, isDemoActive, isAnalyzing, captureFrame]);
 
   // Synchronized High-Contrast Bounding Box HUD Overlays
   useEffect(() => {
