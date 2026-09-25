@@ -553,6 +553,7 @@ export default function App() {
           isSpeaking={isSpeaking}
           onReplay={handleReplayCurrent}
           onStopSpeech={handleStopSpeech}
+          onOpenApiKey={() => setIsApiKeyOpen(true)}
           lang={lang}
         />
 

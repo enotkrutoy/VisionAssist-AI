@@ -1,5 +1,5 @@
 import React from 'react';
-import { Volume2, VolumeX, RotateCcw, AlertTriangle, ShieldAlert, Info, Activity } from 'lucide-react';
+import { Volume2, VolumeX, RotateCcw, AlertTriangle, ShieldAlert, Info, Activity, Key } from 'lucide-react';
 import { HazardLevel } from '../types/assistant';
 
 interface LiveTranscriptBoxProps {
@@ -11,6 +11,7 @@ interface LiveTranscriptBoxProps {
   isSpeaking: boolean;
   onReplay: () => void;
   onStopSpeech: () => void;
+  onOpenApiKey?: () => void;
   lang?: 'en' | 'ru';
 }
 
@@ -23,11 +24,24 @@ export const LiveTranscriptBox: React.FC<LiveTranscriptBoxProps> = ({
   isSpeaking,
   onReplay,
   onStopSpeech,
+  onOpenApiKey,
   lang = 'en',
 }) => {
   const isRu = lang === 'ru';
+  const isKeyIssue =
+    hazardType === 'API_KEY_ERROR' ||
+    hazardType === 'READY_AWAITING_KEY' ||
+    hazardType === 'QUOTA_ERROR';
 
   const getTierBadge = () => {
+    if (isKeyIssue) {
+      return {
+        label: isRu ? 'ТРЕБУЕТСЯ API КЛЮЧ' : 'API KEY REQUIRED',
+        bg: 'bg-amber-400 text-black border-amber-300 animate-pulse',
+        icon: Key,
+      };
+    }
+
     switch (hazardLevel) {
       case 1:
         return {
@@ -111,6 +125,23 @@ export const LiveTranscriptBox: React.FC<LiveTranscriptBoxProps> = ({
         >
           {ttsMessage || (isRu ? 'Направьте камеру устройства вперед.' : 'Point camera forward to begin orientation.')}
         </p>
+
+        {isKeyIssue && onOpenApiKey && (
+          <div className="mt-4 pt-3 border-t border-zinc-800 flex flex-wrap items-center gap-3">
+            <button
+              onClick={onOpenApiKey}
+              className="flex items-center gap-2 px-5 py-3 bg-[#FFEE00] hover:bg-[#ffe600] text-black font-black rounded-xl text-xs uppercase tracking-wider transition min-h-[48px]"
+            >
+              <Key className="w-4 h-4 stroke-[3]" />
+              <span>{isRu ? 'ВВЕСТИ КЛЮЧ GEMINI В 1 КЛИК' : 'ENTER GEMINI KEY IN 1 CLICK'}</span>
+            </button>
+            <span className="text-xs text-zinc-400">
+              {isRu
+                ? 'Ключ бесплатный на aistudio.google.com/apikey и сохраняется в вашем браузере.'
+                : 'Free key from aistudio.google.com/apikey, saved directly in your browser.'}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Action Buttons (All >= 64px min-height) */}
