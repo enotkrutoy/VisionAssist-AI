@@ -15,15 +15,17 @@ export interface AnalyzePayload {
 
 export interface AnalyzeResponse {
   success: boolean;
+  hasKey?: boolean;
   analysis: SpatialAnalysis;
   timestamp: number;
   fallbackEngaged?: boolean;
+  note?: string;
 }
 
 let activeAbortController: AbortController | null = null;
 
-export async function analyzeScene(payload: AnalyzePayload): Promise<SpatialAnalysis> {
-  // Abort any pending previous request to prevent race conditions & lag
+export async function analyzeScene(payload: AnalyzePayload): Promise<{ analysis: SpatialAnalysis; hasKey?: boolean }> {
+  // Abort previous frame request to prevent race conditions & lag
   if (activeAbortController) {
     try {
       activeAbortController.abort();
@@ -58,7 +60,10 @@ export async function analyzeScene(payload: AnalyzePayload): Promise<SpatialAnal
     }
 
     const data: AnalyzeResponse = await response.json();
-    return data.analysis;
+    return {
+      analysis: data.analysis,
+      hasKey: data.hasKey !== false,
+    };
   } catch (err: any) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError') {

@@ -10,7 +10,6 @@ import {
   AssistiveChannel,
   SpatialAnalysis,
   DeviceSensorState,
-  SpeechHistoryItem,
 } from './types/assistant';
 import { analyzeScene } from './services/apiClient';
 import {
@@ -29,6 +28,7 @@ import { LiveTranscriptBox } from './components/LiveTranscriptBox';
 import { TactileControlDeck } from './components/TactileControlDeck';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { ProtocolGuideModal } from './components/ProtocolGuideModal';
+import { Key } from 'lucide-react';
 
 export default function App() {
   // Russian interface default
@@ -43,6 +43,7 @@ export default function App() {
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
   const [isListening, setIsListening] = useState<boolean>(false);
   const [isPaused, setIsPaused] = useState<boolean>(false);
+  const [hasServerOrCustomKey, setHasServerOrCustomKey] = useState<boolean>(true);
 
   const [masterSoundEnabled, setMasterSoundEnabled] = useState<boolean>(true);
   const [isHelpOpen, setIsHelpOpen] = useState<boolean>(false);
@@ -86,7 +87,9 @@ export default function App() {
     detectedObjects: [],
   });
 
+  // Anti-looping and speech throttling references
   const lastSpokenTextRef = useRef<string>('');
+  const lastSpokenTimeRef = useRef<number>(0);
   const lastFrameBase64Ref = useRef<string>('');
   const isAnalyzingRef = useRef<boolean>(false);
   const touchStartXRef = useRef<number | null>(null);
@@ -97,6 +100,7 @@ export default function App() {
     if (typeof window !== 'undefined') {
       if (key) {
         localStorage.setItem('visionassist_gemini_api_key', key);
+        setHasServerOrCustomKey(true);
       } else {
         localStorage.removeItem('visionassist_gemini_api_key');
       }
@@ -171,6 +175,7 @@ export default function App() {
       if (!text || !masterSoundEnabled || isPaused) return;
 
       lastSpokenTextRef.current = text;
+      lastSpokenTimeRef.current = Date.now();
 
       // Update ARIA live regions
       if (level === 1) {
@@ -248,7 +253,7 @@ export default function App() {
     executeSpeechOutput(msg, 3, '12');
   };
 
-  // Analyze Frame
+  // Analyze Frame with Strict Anti-Repetition
   const handleAnalyzeFrame = useCallback(
     async (imageBase64: string, explicitQuery: string = '') => {
       if (!imageBase64 || isAnalyzingRef.current || isPaused) return;
@@ -258,7 +263,7 @@ export default function App() {
       setIsAnalyzing(true);
 
       try {
-        const analysis = await analyzeScene({
+        const { analysis, hasKey } = await analyzeScene({
           imageBase64,
           mode: currentMode,
           channel: currentChannel,
@@ -270,25 +275,54 @@ export default function App() {
           lang,
         });
 
+        if (hasKey !== undefined) {
+          setHasServerOrCustomKey(hasKey);
+        }
+
         setLastAnalysis(analysis);
 
-        // Speaking logic:
-        // PASSIVE: speaks ONLY if obstacle on path (<2m) or Tier 1/2 hazard
-        // ACTIVE / NAVIGATION: speaks all results
+        // Anti-Repetition & Audio Fatigue Protection:
+        // Rule: Never repeat static obstacles in PASSIVE mode!
+        const isSameMessage = analysis.ttsMessage === lastSpokenTextRef.current;
+        const timeSinceLastSpoken = Date.now() - lastSpokenTimeRef.current;
+        const isAlreadySpeaking = speechManager.getSpeakingState();
+
         const isSpecialChannel =
           currentChannel === 'TEXT_OCR' ||
           currentChannel === 'CURRENCY' ||
           currentChannel === 'FIND_OBJECT';
 
-        const mustSpeak =
-          isSpecialChannel ||
-          currentMode === 'ACTIVE' ||
-          currentMode === 'NAVIGATION' ||
-          analysis.hazardLevel === 1 ||
-          analysis.hazardLevel === 2 ||
-          analysis.shouldSpeak;
+        let shouldSpeakNow = false;
 
-        if (mustSpeak && analysis.ttsMessage) {
+        if (explicitQuery || currentMode === 'ACTIVE') {
+          // Explicit user query in Active mode: always deliver answer
+          shouldSpeakNow = Boolean(analysis.ttsMessage);
+        } else if (isSpecialChannel) {
+          // Specialized channel: speak only if new detection or 8+ seconds passed
+          shouldSpeakNow = !isSameMessage || timeSinceLastSpoken > 8000;
+        } else if (currentMode === 'NAVIGATION') {
+          // Navigation mode: speak course directions if changed or 7+ seconds passed
+          shouldSpeakNow = !isSameMessage || timeSinceLastSpoken > 7000;
+        } else {
+          // PASSIVE MODE: Silent by default to prevent audio fatigue!
+          // Speak ONLY on:
+          // 1. Tier 1 Critical emergency (stairs down, collision <1.5m)
+          // 2. Tier 2 Warning (<2.0m) ONLY IF it is a new obstacle or 10+ seconds elapsed
+          if (analysis.hazardLevel === 1 && analysis.distanceMeters <= 1.5) {
+            shouldSpeakNow = !isSameMessage || timeSinceLastSpoken > 4000;
+          } else if (analysis.hazardLevel === 2 && analysis.distanceMeters <= 2.0) {
+            shouldSpeakNow = !isSameMessage || timeSinceLastSpoken > 10000;
+          } else {
+            shouldSpeakNow = false;
+          }
+        }
+
+        // Do not interrupt already playing speech unless it is a Tier 1 Critical emergency!
+        if (isAlreadySpeaking && analysis.hazardLevel !== 1) {
+          shouldSpeakNow = false;
+        }
+
+        if (shouldSpeakNow && analysis.ttsMessage) {
           executeSpeechOutput(analysis.ttsMessage, analysis.hazardLevel, analysis.clockDirection);
         }
       } catch (err: any) {
@@ -437,11 +471,12 @@ export default function App() {
         return prev;
       });
 
-      // Safety announcements if dark or blocked
-      if (isBlocked && !lastSpokenTextRef.current.includes('Камера перекрыта') && !lastSpokenTextRef.current.includes('Camera is covered')) {
+      // Safety announcements if dark or blocked (throttled to avoid loop)
+      const now = Date.now();
+      if (isBlocked && now - lastSpokenTimeRef.current > 8000) {
         const msg = isRu ? 'Камера перекрыта.' : 'Camera is covered.';
         executeSpeechOutput(msg, 1, '12');
-      } else if (isLowLight && !lastSpokenTextRef.current.includes('Недостаточно света') && !lastSpokenTextRef.current.includes('Too dark')) {
+      } else if (isLowLight && now - lastSpokenTimeRef.current > 12000) {
         const msg = isRu ? 'Недостаточно света для обзора, иди осторожно.' : 'Too dark to see, proceed with caution.';
         executeSpeechOutput(msg, 2, '12');
       }
@@ -477,6 +512,24 @@ export default function App() {
         lang={lang}
         onToggleLang={handleToggleLang}
       />
+
+      {/* Key Missing Banner on Vercel */}
+      {!hasServerOrCustomKey && (
+        <div className="bg-zinc-950 border-y-2 border-[#FFEE00] px-4 py-3 text-center text-xs flex flex-wrap items-center justify-center gap-3">
+          <span className="text-[#FFEE00] font-black">
+            {isRu
+              ? '⚠️ Для облачного распознавания объектов укажите ключ Gemini API:'
+              : '⚠️ Add Gemini API key for real-time cloud object detection:'}
+          </span>
+          <button
+            onClick={() => setIsApiKeyOpen(true)}
+            className="flex items-center gap-1.5 px-4 py-1.5 bg-[#FFEE00] text-black font-extrabold rounded-xl text-xs uppercase transition hover:bg-[#ffe600]"
+          >
+            <Key className="w-3.5 h-3.5 stroke-[2.5]" />
+            <span>{isRu ? 'ВВЕСТИ КЛЮЧ В НАСТРОЙКАХ' : 'ENTER API KEY'}</span>
+          </button>
+        </div>
+      )}
 
       {/* Main Single Page Content */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6">

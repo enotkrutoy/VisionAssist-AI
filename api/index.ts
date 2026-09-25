@@ -210,7 +210,6 @@ const ANALYSIS_SCHEMA = {
 
 /* ==========================================================================
    4. DETERMINISTIC SAFETY FAIL-SAFES
-   Guaranteed safety response when offline or before cloud model answers
    ========================================================================== */
 
 function createSafetyFallback(
@@ -250,7 +249,7 @@ function createSafetyFallback(
       verticalZone: 'GENERAL',
       clipContext: isRu ? 'Темное пространство' : 'Low light scene',
       suggestedAction: 'SLOW_DOWN',
-      shouldSpeak: true,
+      shouldSpeak: false,
       detectedObjects: [],
     };
   } else if (sensors.tiltZone === 'GROUND') {
@@ -304,19 +303,18 @@ function createSafetyFallback(
       ],
     };
   } else {
+    // Normal unobstructed scene - SILENT BY DEFAULT!
     fallback = {
-      ttsMessage: isRu
-        ? 'Впереди препятствие неизвестного типа, притормози.'
-        : 'Unclear obstacle ahead, slow down.',
-      hazardLevel: 2,
-      hazardType: 'UNKNOWN_OBSTACLE',
+      ttsMessage: isRu ? 'Путь свободен.' : 'Path clear.',
+      hazardLevel: 0,
+      hazardType: 'CLEAR',
       clockDirection: '12',
-      distanceMeters: 2.5,
-      distanceText: isRu ? 'два метра' : 'two meters',
+      distanceMeters: 0,
+      distanceText: isRu ? 'чисто' : 'clear',
       verticalZone: 'GENERAL',
       clipContext: isRu ? 'Окружающее пространство' : 'Environment',
-      suggestedAction: 'SLOW_DOWN',
-      shouldSpeak: true,
+      suggestedAction: 'CONTINUE',
+      shouldSpeak: false,
       detectedObjects: [],
     };
   }
@@ -378,12 +376,12 @@ async function executeGeminiWithRetry(
 }
 
 /* ==========================================================================
-   6. API ROUTES (COMPATIBLE WITH VERCEL SERVERLESS & EXPRESS SERVER)
-   Supports both '/api/*' and '/*' to guarantee 100% routing success on Vercel
+   6. API CONTROLLERS
    ========================================================================== */
 
-app.post(['/api/analyze', '/analyze'], async (req: Request, res: Response) => {
+async function handleAnalyze(req: Request, res: Response) {
   const lang: 'en' | 'ru' = req.body.lang === 'en' ? 'en' : 'ru';
+  const isRu = lang === 'ru';
 
   try {
     const {
@@ -404,14 +402,26 @@ app.post(['/api/analyze', '/analyze'], async (req: Request, res: Response) => {
 
     const aiClient = getGeminiClient(apiKey);
     if (!aiClient) {
-      console.warn('[VisionAssist AI] No Gemini API Key found in env or request. Using safety fallback.');
-      const fallback = createSafetyFallback(sensors, userQuery, channel, targetObject, lang);
+      // Key missing: Inform cleanly ONCE without spamming loop or inventing fake obstacles
       return res.json({
         success: true,
-        analysis: fallback,
+        hasKey: false,
+        analysis: {
+          ttsMessage: isRu
+            ? 'Ассистент готов. Укажите ключ Gemini API в настройках или Vercel.'
+            : 'Assistant ready. Please add Gemini API key in settings or Vercel.',
+          hazardLevel: 0,
+          hazardType: 'READY_AWAITING_KEY',
+          clockDirection: 'NONE',
+          distanceMeters: 0,
+          distanceText: isRu ? 'чисто' : 'clear',
+          verticalZone: 'GENERAL',
+          clipContext: isRu ? 'Ожидание API ключа' : 'Awaiting API Key',
+          suggestedAction: 'CONTINUE',
+          shouldSpeak: false,
+          detectedObjects: [],
+        },
         timestamp: Date.now(),
-        fallbackEngaged: true,
-        note: 'Using offline safety core. Add GEMINI_API_KEY to Vercel env or in settings for cloud vision.',
       });
     }
 
@@ -425,7 +435,6 @@ app.post(['/api/analyze', '/analyze'], async (req: Request, res: Response) => {
       cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
     }
 
-    const isRu = lang === 'ru';
     let channelInstruction = '';
     if (channel === 'TEXT_OCR') {
       channelInstruction = isRu
@@ -481,11 +490,12 @@ app.post(['/api/analyze', '/analyze'], async (req: Request, res: Response) => {
 
     res.json({
       success: true,
+      hasKey: true,
       analysis: parsed,
       timestamp: Date.now(),
     });
   } catch (error: any) {
-    console.warn('[VisionAssist AI] Cloud model call error, engaging safety fallback:', error?.message);
+    console.warn('[VisionAssist AI] Inference error, engaging safety fallback:', error?.message);
     const fallback = createSafetyFallback(
       req.body.sensors,
       req.body.userQuery,
@@ -495,14 +505,15 @@ app.post(['/api/analyze', '/analyze'], async (req: Request, res: Response) => {
     );
     res.json({
       success: true,
+      hasKey: true,
       analysis: fallback,
       timestamp: Date.now(),
       fallbackEngaged: true,
     });
   }
-});
+}
 
-app.post(['/api/tts', '/tts'], async (req: Request, res: Response) => {
+async function handleTts(req: Request, res: Response) {
   const lang: 'en' | 'ru' = req.body.lang === 'en' ? 'en' : 'ru';
   try {
     const { text, apiKey = '' } = req.body;
@@ -563,9 +574,9 @@ app.post(['/api/tts', '/tts'], async (req: Request, res: Response) => {
       message: error?.message || 'TTS fallback to Web Speech API',
     });
   }
-});
+}
 
-app.get(['/api/health', '/health', '/api'], (_req: Request, res: Response) => {
+function handleHealth(_req: Request, res: Response) {
   res.json({
     status: 'ok',
     app: 'VisionAssist AI',
@@ -573,6 +584,29 @@ app.get(['/api/health', '/health', '/api'], (_req: Request, res: Response) => {
     hasServerKey: Boolean(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY),
     time: new Date().toISOString(),
   });
+}
+
+/* ==========================================================================
+   7. UNIVERSAL ROUTE MOUNTING (VERCEL REWRITE SAFE)
+   Matches both direct URLs and stripped paths seamlessly
+   ========================================================================== */
+
+app.post(['/api/analyze', '/analyze'], handleAnalyze);
+app.post(['/api/tts', '/tts'], handleTts);
+app.get(['/api/health', '/health', '/api'], handleHealth);
+
+// Universal fallback middleware for any rewritten paths
+app.use((req: Request, res: Response, next: any) => {
+  if (req.method === 'POST' && req.url.includes('analyze')) {
+    return handleAnalyze(req, res);
+  }
+  if (req.method === 'POST' && req.url.includes('tts')) {
+    return handleTts(req, res);
+  }
+  if (req.method === 'GET' && (req.url.includes('health') || req.url === '/' || req.url === '/api')) {
+    return handleHealth(req, res);
+  }
+  next();
 });
 
 export default app;
