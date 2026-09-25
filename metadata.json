@@ -1,0 +1,9 @@
+{
+  "name": "AuraVision Core",
+  "description": "Autonomous spatial orientation and safety assistant for blind and visually impaired users with multimodal vision and clock-coordinate TTS.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

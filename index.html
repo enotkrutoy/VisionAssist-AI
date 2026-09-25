@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>VisionAssist AI — Система Мультимодальной Ассистивной Ориентации</title>
+    <meta name="description" content="Автономная система пространственной ориентации и безопасности VisionAssist AI для незрячих и слабовидящих пользователей со стереозвуком 3D и циферблатной навигацией." />
+    <meta property="og:title" content="VisionAssist AI — Система Мультимодальной Ассистивной Ориентации" />
+    <meta property="og:description" content="Автономная система пространственной ориентации и безопасности VisionAssist AI для незрячих и слабовидящих пользователей со стереозвуком 3D и циферблатной навигацией." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#000000" />
+    <script>
+      // Suppress Vite HMR WebSocket connection warnings in AI Studio preview iframe
+      window.addEventListener('unhandledrejection', function(event) {
+        var reason = event && event.reason;
+        var msg = (reason && (reason.message || reason)) || '';
+        if (typeof msg === 'string' && (msg.indexOf('WebSocket') !== -1 || msg.indexOf('websocket') !== -1 || msg.indexOf('closed without opened') !== -1)) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      }, true);
+
+      var origError = console.error;
+      console.error = function() {
+        var str = arguments && arguments[0] ? String(arguments[0]) : '';
+        if (str.indexOf('[vite]') !== -1 || str.indexOf('WebSocket') !== -1 || str.indexOf('websocket') !== -1) {
+          return;
+        }
+        origError.apply(console, arguments);
+      };
+
+      var origWarn = console.warn;
+      console.warn = function() {
+        var str = arguments && arguments[0] ? String(arguments[0]) : '';
+        if (str.indexOf('[vite]') !== -1 || str.indexOf('WebSocket') !== -1) {
+          return;
+        }
+        origWarn.apply(console, arguments);
+      };
+    </script>
+  </head>
+  <body class="bg-black text-white antialiased selection:bg-[#FFEE00] selection:text-black overflow-x-hidden">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
