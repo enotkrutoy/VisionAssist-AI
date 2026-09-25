@@ -562,7 +562,7 @@ export default function App() {
             <CameraStream
               onCaptureFrame={(base64) => handleAnalyzeFrame(base64)}
               isAnalyzing={isAnalyzing}
-              detectedObjects={lastAnalysis.detectedObjects}
+              detectedObjects={lastAnalysis.detectedObjects || []}
               hazardLevel={lastAnalysis.hazardLevel}
               autoScanInterval={1.5}
               highContrast={true}

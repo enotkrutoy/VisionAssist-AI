@@ -6,7 +6,7 @@ dotenv.config();
 
 const app = express();
 
-app.use(express.json({ limit: '25mb' }));
+app.use(express.json({ limit: '30mb' }));
 
 /* ==========================================================================
    1. GEMINI CLIENT INITIALIZER
@@ -54,13 +54,13 @@ export function sanitizeForTts(raw: string, lang: 'en' | 'ru' = 'ru'): string {
   if (lang === 'ru') {
     cleaned = cleaned
       .replace(
-        /^(я вижу|перед вами находится|перед вами|на изображении представлено|внимание я зафиксировал|внимание, я зафиксировал|я обнаружил)[,:\s]*/i,
+        /^(я вижу|перед вами находится|перед вами|на изображении представлено|внимание я зафиксировал|внимание, я зафиксировал|я обнаружил|на фото)[,:\s]*/i,
         ''
       );
   } else {
     cleaned = cleaned
       .replace(
-        /^(i see|in front of you is|there is|there are|attention i see|caution i detected|as an ai)[,:\s]*/i,
+        /^(i see|in front of you is|there is|there are|attention i see|caution i detected|as an ai|in the image)[,:\s]*/i,
         ''
       );
   }
@@ -75,56 +75,59 @@ export function sanitizeForTts(raw: string, lang: 'en' | 'ru' = 'ru'): string {
 }
 
 /* ==========================================================================
-   3. SYSTEM INSTRUCTIONS (RUSSIAN & ENGLISH)
+   3. ADVANCED COMPUTER VISION SYSTEM INSTRUCTIONS
    ========================================================================== */
 
-const SYSTEM_INSTRUCTION_RU = `Ты — автономное интеллектуальное ядро пространственной ориентации и безопасности в системе Smart Real-Time Multimodal Assistance (VisionAssist AI) для незрячих и слабовидящих пользователей.
+const SYSTEM_INSTRUCTION_RU = `Ты — ведущее высокоточное ядро компьютерного зрения и пространственной навигации VisionAssist AI для незрячих и слабовидящих пользователей. Твоя задача — мгновенный детальный анализ реального видеокадра с камеры устройства.
 
-ПРИОРИТЕТ БЕЗОПАСНОСТИ:
-Препятствия на уровне головы, груди и под ногами (ступени вниз, бордюры, люки), движущийся транспорт.
+ОСНОВНЫЕ ПРАВИЛА РАСПОЗНАВАНИЯ:
+1. НАХОДИ РЕАЛЬНЫЕ ОБЪЕКТЫ: Стулья, столы, двери, дверные ручки, людей, ступени, бордюры, стены, полки, компьютеры, телефоны, ключи, чашки, надписи, текст, препятствия. Обязательно добавляй каждый видимый ключевой объект в массив detectedObjects с координатами box2d [ymin, xmin, ymax, xmax] от 0 до 1000!
+2. ЧАСОВАЯ СИСТЕМА КООРДИНАТ (по горизонтальному центру xmin/xmax):
+   - 0..150: "9" (строго слева)
+   - 150..350: "10" или "11" (впереди слева)
+   - 350..650: "12" (прямо перед пользователем)
+   - 650..850: "1" или "2" (впереди справа)
+   - 850..1000: "3" (строго справа)
+3. ОЦЕНКА ДИСТАНЦИИ И ГЛУБИНЫ:
+   - Крупный объект (занимает больше половины высоты кадра или основание ymax > 850): "полметра" / "один метр" / "один шаг" (0.5 - 1.2 м)
+   - Средний объект (занимает 25-50% кадра): "полтора метра" / "два метра" / "два-три шага" (1.5 - 2.5 м)
+   - Удаленный объект (меньше 20% кадра): "три метра" / "четыре метра" (3 - 5 м)
+4. ВЕРТИКАЛЬНАЯ ЗОНА:
+   - Верхняя треть (ymin < 300 и центр y < 400): "HEAD" (на уровне головы / нависающие ветки, косяк)
+   - Средняя зона: "CHEST" (на уровне груди / ручки, стол, человек)
+   - Нижняя треть (ymax > 700): "GROUND" (под ногами / ступени, порог, яма, пол)
+5. ТРЕБОВАНИЯ К TTS ОПОВЕЩЕНИЮ (ttsMessage):
+   - Исключительно естественный русский текст без разметки, звездочек и кавычек.
+   - Сразу суть без вводных слов.
+   - Уровень 1 (Опасность столкновения <1.5м, ступени вниз, голова): "Стоп, [объект] на [часы] в [дистанция]." (2-5 слов)
+   - Уровень 2 (Предупреждение 1.5-3м): "[Объект] на [часы], обход [направление]." (4-7 слов)
+   - Уровень 3 (Ориентиры/Навигация): "[Объект] на [часы] в [дистанция]." (до 10 слов)
+   - Если путь полностью свободен: ttsMessage = "Путь свободен.", hazardLevel = 0, shouldSpeak = false.`;
 
-ТРЕБОВАНИЯ К TTS:
-1. Только готовый русский текст в поле ttsMessage.
-2. Без markdown, спецсимволов, звездочек, латиницы, скобок, кавычек и вводных фраз ("Я вижу", "Перед вами").
+const SYSTEM_INSTRUCTION_EN = `You are the world-class real-time computer vision and spatial intelligence core for VisionAssist AI designed for visually impaired and blind users. Your task is high-accuracy object detection, spatial clock positioning, depth estimation, and natural spoken output.
 
-КООРДИНАТЫ ПО ЧАСАМ (относительно груди):
-- 12 часов: прямо. 1-2 часа: впереди справа. 3 часа: справа. 9 часов: слева. 10-11 часов: впереди слева.
-- Дистанция: в метрах или шагах ("один метр", "два шага").
-- Вертикаль: "на уровне головы", "под ногами".
-
-ИЕРАРХИЯ ОПАСНОСТЕЙ:
-- Уровень 1 (Критический, <1.5м): от 2 до 5 слов ("Стоп, ступени вниз впереди.", "Стоп, столб на 12 часов.").
-- Уровень 2 (Высокий, 2-4м): от 4 до 7 слов ("Пешеход на 1 час, держись левее.").
-- Уровень 3 (Информационный): до 10-12 слов. Текст с префиксом "Текст:".`;
-
-const SYSTEM_INSTRUCTION_EN = `You are the autonomous spatial intelligence and safety core for "Smart Real-Time Multimodal Assistance System (VisionAssist AI)" designed for visually impaired and blind users. Your task is real-time analysis of visual frames, object detection (bounding boxes), context, and distance estimation to generate concise spoken output directly forwarded to TTS.
-
-FUNDAMENTAL RULE:
-User safety precedes everything. Priority is given to head-level, chest-level, and ground drop-off hazards, elevation changes, stairs down, curbs, open holes, and moving vehicles.
-
-STRICT TTS FORMAT REQUIREMENTS:
-1. Output strictly plain spoken English in ttsMessage.
-2. ZERO markdown (#, *, _, \`, >), NO bullet points, NO lists, NO brackets, NO quotes, NO emojis, NO conversational filler ("I see", "There is", "In front of you"). Jump straight to the point.
-3. Natural, calm, authoritative tone.
-
-SPATIAL CLOCK-FACE COORDINATES (relative to user's chest):
-- 12 o'clock = Straight ahead.
-- 1 to 2 o'clock = Ahead to the right.
-- 3 o'clock = Directly right.
-- 9 o'clock = Directly left.
-- 10 to 11 o'clock = Ahead to the left.
-- Distance estimation: "one meter", "two steps", "three meters".
-- Vertical alerts: specify if hazard is at head level ("tree branch at head level") or ground level ("step down in two steps").
-
-PRIORITY ALERT HIERARCHY & WORD LIMITS:
-- TIER 1 - CRITICAL (Collision risk <1.5m, drop-offs, stairs down, open holes, moving vehicles, head hazard):
-  * Reaction: Immediate command to halt or evade.
-  * Word limit: 2 to 5 words.
-- TIER 2 - WARNING (Obstacles 2-4m away, oncoming pedestrians, poles):
-  * Word limit: 4 to 7 words.
-- TIER 3 - INFORMATIONAL (Open walkways, doors, benches, room numbers):
-  * Word limit: up to 10-12 words.
-  * For text reading (OCR): prefix with "Text: [read text]".`;
+DETECTION PRINCIPLES:
+1. DETECT REAL PHYSICAL OBJECTS: Chairs, tables, doors, door handles, people, stairs (up/down), curbs, walls, laptops, keys, mugs, signs, obstacles. Always populate detectedObjects with accurate box2d [ymin, xmin, ymax, xmax] (0-1000 scale).
+2. 12-HOUR CLOCK COORDINATES (from horizontal center xmin/xmax):
+   - 0..150: "9" (directly left)
+   - 150..350: "10" or "11" (ahead to left)
+   - 350..650: "12" (straight ahead)
+   - 650..850: "1" or "2" (ahead to right)
+   - 850..1000: "3" (directly right)
+3. DISTANCE ESTIMATION:
+   - Large bounding box (occupies >50% frame or base ymax > 850): "one meter" / "half meter" / "one step" (0.5 - 1.2m)
+   - Medium bounding box: "two meters" / "three steps" (1.5 - 2.5m)
+   - Small bounding box: "three to four meters" (3 - 5m)
+4. VERTICAL ZONES:
+   - Upper third: "HEAD" (head level hazard)
+   - Middle: "CHEST" (body level)
+   - Lower: "GROUND" (ground / floor / stairs down)
+5. TTS OUTPUT (ttsMessage):
+   - Direct, authoritative, no markdown, no asterisks, no filler.
+   - Tier 1 (<1.5m risk): "Stop, [hazard] at [clock] in [distance]."
+   - Tier 2 (1.5-3m): "[Obstacle] at [clock], pass [direction]."
+   - Tier 3 (Clear/safe landmarks): "[Object] at [clock] in [distance]."
+   - Path Clear: ttsMessage = "Path clear.", hazardLevel = 0, shouldSpeak = false.`;
 
 const ANALYSIS_SCHEMA = {
   type: Type.OBJECT,
@@ -140,7 +143,7 @@ const ANALYSIS_SCHEMA = {
     hazardType: {
       type: Type.STRING,
       description:
-        'STAIRS_DOWN, HEAD_OBSTACLE, VEHICLE, PEDESTRIAN, POLE, DOOR, BENCH, SIGN_TEXT, CURRENCY, FOUND_OBJECT, CAMERA_OCCLUDED, LOW_LIGHT, UNKNOWN_OBSTACLE, CLEAR',
+        'STAIRS_DOWN, STAIRS_UP, HEAD_OBSTACLE, VEHICLE, PEDESTRIAN, POLE, DOOR, BENCH, CHAIR, TABLE, SIGN_TEXT, CURRENCY, FOUND_OBJECT, CAMERA_OCCLUDED, LOW_LIGHT, UNKNOWN_OBSTACLE, CLEAR',
     },
     clockDirection: {
       type: Type.STRING,
@@ -148,11 +151,11 @@ const ANALYSIS_SCHEMA = {
     },
     distanceMeters: {
       type: Type.NUMBER,
-      description: 'Distance estimate in meters',
+      description: 'Distance estimate in meters (e.g. 1.2)',
     },
     distanceText: {
       type: Type.STRING,
-      description: 'Distance spoken words (e.g. один метр / one meter)',
+      description: 'Distance spoken words in target language (e.g. один метр / one meter)',
     },
     verticalZone: {
       type: Type.STRING,
@@ -160,30 +163,30 @@ const ANALYSIS_SCHEMA = {
     },
     detectedValue: {
       type: Type.STRING,
-      description: 'Key extracted value for OCR or specialized reader',
+      description: 'Extracted text for OCR or currency denomination (e.g. "Кабинет 305" or "1000 рублей")',
     },
     detectedObjects: {
       type: Type.ARRAY,
       items: {
         type: Type.OBJECT,
         properties: {
-          label: { type: Type.STRING },
+          label: { type: Type.STRING, description: 'Clear name of detected item in target language' },
           confidence: { type: Type.NUMBER },
           box2d: {
             type: Type.ARRAY,
             items: { type: Type.NUMBER },
             description: '[ymin, xmin, ymax, xmax] normalized 0-1000',
           },
-          clockDirection: { type: Type.STRING },
-          distance: { type: Type.STRING },
-          hazardLevel: { type: Type.INTEGER },
+          clockDirection: { type: Type.STRING, description: '12, 1, 2, 3, 9, 10, 11' },
+          distance: { type: Type.STRING, description: 'Human distance e.g. один метр' },
+          hazardLevel: { type: Type.INTEGER, description: '1 = red critical, 2 = amber warning, 3 = green safe' },
         },
         required: ['label', 'box2d', 'clockDirection', 'distance', 'hazardLevel'],
       },
     },
     clipContext: {
       type: Type.STRING,
-      description: 'Environmental context',
+      description: 'Brief 2-3 word description of environment (e.g. Комната, Офис, Улица)',
     },
     suggestedAction: {
       type: Type.STRING,
@@ -205,6 +208,7 @@ const ANALYSIS_SCHEMA = {
     'clipContext',
     'suggestedAction',
     'shouldSpeak',
+    'detectedObjects',
   ],
 };
 
@@ -280,8 +284,8 @@ function createSafetyFallback(
   } else if (sensors.tiltZone === 'HEAD') {
     fallback = {
       ttsMessage: isRu
-        ? 'Внимание, ветка на уровне головы, пригнись.'
-        : 'Stop, branch at head level.',
+        ? 'Внимание, препятствие на уровне головы, пригнись.'
+        : 'Stop, obstacle at head level.',
       hazardLevel: 1,
       hazardType: 'HEAD_OBSTACLE',
       clockDirection: '12',
@@ -303,7 +307,7 @@ function createSafetyFallback(
       ],
     };
   } else {
-    // Normal unobstructed scene - SILENT BY DEFAULT!
+    // Normal clear scene - SILENT BY DEFAULT!
     fallback = {
       ttsMessage: isRu ? 'Путь свободен.' : 'Path clear.',
       hazardLevel: 0,
@@ -435,42 +439,80 @@ async function handleAnalyze(req: Request, res: Response) {
       cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
     }
 
+    // High-precision channel instruction builder
     let channelInstruction = '';
     if (channel === 'TEXT_OCR') {
       channelInstruction = isRu
-        ? 'СПЕЦ-КАНАЛ [ТЕКСТ / OCR]: Распознай текст на вывеске, табличке или ценнике. Префикс "Текст: [содержание]".'
-        : 'SPECIAL CHANNEL [TEXT / OCR]: Read signs, price tags, or room numbers clearly prefixed with "Text: [read text]".';
+        ? `СПЕЦИАЛЬНЫЙ КАНАЛ [БЫСТРЫЙ ТЕКСТ / OCR]:
+1. Найди весь видимый текст на вывесках, табличках, дверях, экранах, бумаге или ценниках.
+2. Помести полный распознанный текст в поле "detectedValue".
+3. В поле "ttsMessage" выдай чистый текст для озвучивания с префиксом "Текст: [найденный текст]". Если текста нет: "Текст в кадре не обнаружен".
+4. Обязательно выдели текстовые блоки в detectedObjects.`
+        : `SPECIAL CHANNEL [TEXT OCR]:
+1. Read all visible signs, room numbers, labels, product text, screens.
+2. Put extracted text in "detectedValue".
+3. Output "ttsMessage" as "Text: [read text]". If none, "No text found in view".
+4. Mark text regions in detectedObjects.`;
     } else if (channel === 'CURRENCY') {
       channelInstruction = isRu
-        ? 'СПЕЦ-КАНАЛ [КУПЮРЫ]: Определи номинал и валюту банкнот или монет в кадре.'
-        : 'SPECIAL CHANNEL [CURRENCY]: Identify banknote or coin denomination and currency accurately.';
+        ? `СПЕЦИАЛЬНЫЙ КАНАЛ [КУПЮРЫ И ДЕНЬГИ]:
+1. Определи номинал и валюту банкнот или монет в кадре (рубли, доллары, евро).
+2. Запиши номинал в "detectedValue" (например: "1000 рублей", "100 долларов").
+3. В поле "ttsMessage" выдай: "Купюра [номинал]."
+4. Добавь купюру в detectedObjects.`
+        : `SPECIAL CHANNEL [CURRENCY READER]:
+1. Identify denomination and currency of banknotes or coins in view.
+2. Set "detectedValue" to denomination (e.g. "100 dollars", "50 euros", "1000 rubles").
+3. Output "ttsMessage" as "Banknote [value]."
+4. Add to detectedObjects.`;
     } else if (channel === 'FIND_OBJECT') {
       const target = targetObject || userQuery || (isRu ? 'дверь' : 'door');
       channelInstruction = isRu
-        ? `СПЕЦ-КАНАЛ [ПОИСК]: Ищи объект "${target}". Сообщи часы и дистанцию, или "Объект не найден".`
-        : `SPECIAL CHANNEL [FIND OBJECT]: Locate target "${target}". Report clock position and distance, or "Target not found".`;
+        ? `СПЕЦИАЛЬНЫЙ КАНАЛ [ПОИСК ЦЕЛИ: "${target}"]:
+1. Внимательно ищи объект "${target}" в кадре.
+2. Если объект найден:
+   - Внеси его в detectedObjects с точным box2d и clockDirection.
+   - В "ttsMessage" скажи: "[Название] на [часы] в [дистанция]." (например: "Дверь на 12 часов в трех шагах").
+   - hazardType = "FOUND_OBJECT", shouldSpeak = true.
+3. Если объект НЕ найден в кадре:
+   - ttsMessage = "Объект ${target} в кадре не найден. Поверните камеру медленно в сторону.", shouldSpeak = false.`
+        : `SPECIAL CHANNEL [FIND TARGET OBJECT: "${target}"]:
+1. Search specifically for "${target}".
+2. If found: add to detectedObjects with box2d, output "[Object] at [clock] in [distance]", hazardType = "FOUND_OBJECT", shouldSpeak = true.
+3. If not found: report "Target ${target} not in view. Pan camera slowly."`;
+    } else {
+      channelInstruction = isRu
+        ? `РЕЖИМ НАВИГАЦИИ И ОБНАРУЖЕНИЯ:
+1. Найди все ключевые объекты перед пользователем (стулья, столы, двери, люди, проходы, препятствия).
+2. Добавь все обнаруженные объекты в массив detectedObjects с реальными рамками box2d и часами!
+3. Для главного объекта или препятствия на пути сформируй ttsMessage: "[Объект] на [часы] в [дистанция]."
+4. Если путь свободен: ttsMessage = "Путь свободен.", hazardLevel = 0, shouldSpeak = false.`
+        : `EXPLORE NAVIGATION MODE:
+1. Detect all key objects in front of user (furniture, doors, people, obstacles).
+2. Populate detectedObjects with precise box2d and clockDirection.
+3. If path is clear: ttsMessage = "Path clear.", hazardLevel = 0, shouldSpeak = false.`;
     }
 
     const promptParts = [
       `OPERATIONAL MODE: ${mode}`,
       channelInstruction,
       sensors.tiltZone
-        ? `DEVICE TILT: ${
+        ? `DEVICE TILT SENSOR: ${
             sensors.tiltZone === 'GROUND'
               ? 'Tilted down at ground / floor'
               : sensors.tiltZone === 'HEAD'
-              ? 'Tilted up toward head level'
-              : 'Facing straight ahead'
+              ? 'Tilted up toward ceiling / head level'
+              : 'Level / facing straight ahead'
           }`
         : '',
-      sensors.isLowLight ? 'SENSOR ALERT: Low light level (<25 luminance)' : '',
-      sensors.isLensBlocked ? 'SENSOR ALERT: Camera lens is covered / obstructed' : '',
+      sensors.isLowLight ? 'SENSOR ALERT: Low light scene (<25 lux)' : '',
+      sensors.isLensBlocked ? 'SENSOR ALERT: Camera lens is occluded' : '',
       lastSpokenText
-        ? `PREVIOUS ANNOUNCEMENT: "${lastSpokenText}" (Do not repeat static obstacles).`
+        ? `PREVIOUS ANNOUNCEMENT: "${lastSpokenText}" (Do not repeat static obstacles unless distance significantly changed).`
         : '',
       userQuery
-        ? `USER SPOKEN QUERY: "${userQuery}". Answer concisely in under 15 words adhering to safety rules.`
-        : 'Analyze frame for Tier 1-3 hazards, calculate 12-hour clock directions, and output concise TTS intelligence.',
+        ? `USER SPOKEN QUERY: "${userQuery}". Answer directly and concisely adhering to safety rules.`
+        : 'Perform comprehensive object detection, estimate distances, and output spatial clock coordinates.',
     ]
       .filter(Boolean)
       .join('\n');
@@ -486,6 +528,11 @@ async function handleAnalyze(req: Request, res: Response) {
 
     if (parsed.ttsMessage) {
       parsed.ttsMessage = sanitizeForTts(parsed.ttsMessage, lang);
+    }
+
+    // Ensure detectedObjects is always an array
+    if (!Array.isArray(parsed.detectedObjects)) {
+      parsed.detectedObjects = [];
     }
 
     res.json({
@@ -588,7 +635,6 @@ function handleHealth(_req: Request, res: Response) {
 
 /* ==========================================================================
    7. UNIVERSAL ROUTE MOUNTING (VERCEL REWRITE SAFE)
-   Matches both direct URLs and stripped paths seamlessly
    ========================================================================== */
 
 app.post(['/api/analyze', '/analyze'], handleAnalyze);
