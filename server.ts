@@ -1,7 +1,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import express, { Request, Response } from 'express';
-import app from './api/index.ts';
+import app from './api/index';
 
 process.env.DISABLE_HMR = 'true';
 
