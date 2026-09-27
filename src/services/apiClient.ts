@@ -16,15 +16,21 @@ export interface AnalyzePayload {
 export interface AnalyzeResponse {
   success: boolean;
   hasKey?: boolean;
+  retryAfterMs?: number;
   analysis: SpatialAnalysis;
   timestamp: number;
   fallbackEngaged?: boolean;
   note?: string;
+  debugError?: string;
 }
 
 let isRequestInProgress = false;
 
-export async function analyzeScene(payload: AnalyzePayload): Promise<{ analysis: SpatialAnalysis; hasKey?: boolean }> {
+export async function analyzeScene(payload: AnalyzePayload): Promise<{
+  analysis: SpatialAnalysis;
+  hasKey?: boolean;
+  retryAfterMs?: number;
+}> {
   // Concurrency guard: Do not interrupt an in-flight analysis, let it complete
   if (isRequestInProgress) {
     throw new Error('Analysis in progress');
@@ -59,6 +65,7 @@ export async function analyzeScene(payload: AnalyzePayload): Promise<{ analysis:
     return {
       analysis: data.analysis,
       hasKey: data.hasKey !== false,
+      retryAfterMs: data.retryAfterMs,
     };
   } catch (err: any) {
     clearTimeout(timeoutId);

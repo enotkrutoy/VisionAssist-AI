@@ -25,6 +25,7 @@ interface CameraStreamProps {
   onLuminanceChange?: (luminance: number, isLowLight: boolean, isBlocked: boolean) => void;
   isTorchOn?: boolean;
   onToggleTorch?: (state: boolean) => void;
+  scanCooldownMs?: number;
 }
 
 export const CameraStream: React.FC<CameraStreamProps> = ({
@@ -37,6 +38,7 @@ export const CameraStream: React.FC<CameraStreamProps> = ({
   onLuminanceChange,
   isTorchOn = false,
   onToggleTorch,
+  scanCooldownMs,
 }) => {
   const isRu = lang === 'ru';
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -485,27 +487,37 @@ export const CameraStream: React.FC<CameraStreamProps> = ({
     reader.readAsDataURL(file);
   };
 
-  // Completion-Driven Adaptive Auto-Scan Loop
+  // Completion-Driven Adaptive Auto-Scan Loop with Quota Protection & Backoff
   useEffect(() => {
     if (!isCameraActive && !isDemoActive) return;
 
     let timer: any = null;
     let isMounted = true;
 
-    // When NOT analyzing, schedule next capture with a smooth 700ms cooldown
+    // When NOT analyzing, schedule next capture with adaptive cooldown
     if (!isAnalyzing) {
+      // Determine adaptive interval:
+      // If scanCooldownMs passed (e.g. from 429/503 rate-limit backoff), strictly respect it
+      // Otherwise: 2500ms when moving, 3800ms when static
+      const delay =
+        scanCooldownMs && scanCooldownMs > 1000
+          ? scanCooldownMs
+          : hasMotion
+          ? 2500
+          : 3800;
+
       timer = setTimeout(() => {
         if (isMounted && (isCameraActive || isDemoActive)) {
           captureFrame(false);
         }
-      }, 700);
+      }, delay);
     }
 
     return () => {
       isMounted = false;
       if (timer) clearTimeout(timer);
     };
-  }, [isCameraActive, isDemoActive, isAnalyzing, captureFrame]);
+  }, [isCameraActive, isDemoActive, isAnalyzing, hasMotion, scanCooldownMs, captureFrame]);
 
   // Synchronized High-Contrast Bounding Box HUD Overlays
   useEffect(() => {

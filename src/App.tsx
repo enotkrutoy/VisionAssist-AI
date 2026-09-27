@@ -45,6 +45,7 @@ export default function App() {
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [hasServerOrCustomKey, setHasServerOrCustomKey] = useState<boolean>(true);
   const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [scanCooldownMs, setScanCooldownMs] = useState<number>(3500);
 
   // Monitor network online/offline state
   useEffect(() => {
@@ -276,7 +277,7 @@ export default function App() {
       setIsAnalyzing(true);
 
       try {
-        const { analysis, hasKey } = await analyzeScene({
+        const { analysis, hasKey, retryAfterMs } = await analyzeScene({
           imageBase64,
           mode: currentMode,
           channel: currentChannel,
@@ -290,6 +291,14 @@ export default function App() {
 
         if (hasKey !== undefined) {
           setHasServerOrCustomKey(hasKey);
+        }
+
+        if (retryAfterMs && retryAfterMs > 0) {
+          setScanCooldownMs(retryAfterMs);
+        } else if (analysis.hazardType === 'QUOTA_ERROR' || analysis.hazardType === 'SERVER_BUSY') {
+          setScanCooldownMs(7000);
+        } else {
+          setScanCooldownMs(3500);
         }
 
         setLastAnalysis(analysis);
@@ -582,7 +591,8 @@ export default function App() {
               isAnalyzing={isAnalyzing}
               detectedObjects={lastAnalysis.detectedObjects || []}
               hazardLevel={lastAnalysis.hazardLevel}
-              autoScanInterval={1.5}
+              autoScanInterval={3.5}
+              scanCooldownMs={scanCooldownMs}
               highContrast={true}
               lang={lang}
               onLuminanceChange={handleLuminanceChange}

@@ -313,10 +313,11 @@ function createSafetyFallback(
 }
 
 /* ==========================================================================
-   5. MULTI-MODEL INFERENCE CASCADE (LITE FIRST)
+   5. MULTI-MODEL INFERENCE CASCADE (LITE FIRST & QUOTA PROTECTED)
    ========================================================================== */
 
-const CANDIDATE_MODELS = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
+const PRIMARY_MODEL = 'gemini-3.1-flash-lite';
+const FALLBACK_MODEL = 'gemini-flash-latest';
 
 async function executeGeminiWithRetry(
   aiClient: GoogleGenAI,
@@ -324,54 +325,80 @@ async function executeGeminiWithRetry(
   promptParts: string,
   lang: 'en' | 'ru' = 'ru'
 ): Promise<any> {
-  let lastErr: any = null;
   const sysInst = lang === 'ru' ? SYSTEM_INSTRUCTION_RU : SYSTEM_INSTRUCTION_EN;
 
-  for (const model of CANDIDATE_MODELS) {
-    try {
-      const response = await aiClient.models.generateContent({
-        model,
-        contents: {
-          parts: [contents, { text: promptParts }],
-        },
-        config: {
-          systemInstruction: sysInst,
-          responseMimeType: 'application/json',
-          responseSchema: ANALYSIS_SCHEMA,
-          temperature: 0.1,
-        },
-      });
+  const runModel = async (modelName: string) => {
+    const response = await aiClient.models.generateContent({
+      model: modelName,
+      contents: {
+        parts: [contents, { text: promptParts }],
+      },
+      config: {
+        systemInstruction: sysInst,
+        responseMimeType: 'application/json',
+        responseSchema: ANALYSIS_SCHEMA,
+        temperature: 0.1,
+      },
+    });
+    const text = response.text?.trim() || '{}';
+    return JSON.parse(text);
+  };
 
-      const text = response.text?.trim() || '{}';
-      return JSON.parse(text);
-    } catch (err: any) {
-      lastErr = err;
-      const errMsg = err?.message || String(err);
+  // Primary attempt with gemini-3.1-flash-lite
+  try {
+    return await runModel(PRIMARY_MODEL);
+  } catch (err: any) {
+    const errMsg = err?.message || String(err);
 
-      // If key is invalid or unauthorized, don't waste time retrying other models with the same broken key
-      if (
-        errMsg.includes('API key not valid') ||
-        errMsg.includes('API_KEY_INVALID') ||
-        errMsg.includes('PERMISSION_DENIED')
-      ) {
-        throw err;
-      }
-
-      if (
-        errMsg.includes('503') ||
-        errMsg.includes('high demand') ||
-        errMsg.includes('429') ||
-        errMsg.includes('UNAVAILABLE') ||
-        errMsg.includes('RESOURCE_EXHAUSTED')
-      ) {
-        console.warn(`[VisionAssist AI] Model ${model} busy (${errMsg.slice(0, 50)}), cascading...`);
-        continue;
-      }
-      break;
+    // If key is invalid or unauthorized, fail immediately without retrying
+    if (
+      errMsg.includes('API key not valid') ||
+      errMsg.includes('API_KEY_INVALID') ||
+      errMsg.includes('PERMISSION_DENIED')
+    ) {
+      throw err;
     }
-  }
 
-  throw lastErr || new Error('All candidate models unavailable');
+    // If 429 / RESOURCE_EXHAUSTED / quota exceeded:
+    // DO NOT cascade to other models! Project quota is exhausted or rate limit hit.
+    // Propagate error immediately so handleAnalyze can inform the client to back off.
+    if (
+      errMsg.includes('429') ||
+      errMsg.includes('RESOURCE_EXHAUSTED') ||
+      errMsg.includes('quota')
+    ) {
+      throw err;
+    }
+
+    // If 503 (model temporarily overloaded) or network glitch:
+    // Retry once with 800ms delay on PRIMARY_MODEL
+    if (
+      errMsg.includes('503') ||
+      errMsg.includes('high demand') ||
+      errMsg.includes('UNAVAILABLE') ||
+      errMsg.includes('overloaded')
+    ) {
+      console.warn(`[VisionAssist AI] Model ${PRIMARY_MODEL} busy (503), retrying in 800ms...`);
+      await new Promise((r) => setTimeout(r, 800));
+      try {
+        return await runModel(PRIMARY_MODEL);
+      } catch (retryErr: any) {
+        const retryMsg = retryErr?.message || String(retryErr);
+        if (retryMsg.includes('429') || retryMsg.includes('RESOURCE_EXHAUSTED')) {
+          throw retryErr;
+        }
+        // If 503 persists, attempt FALLBACK_MODEL as final resort
+        console.warn(`[VisionAssist AI] Attempting fallback model ${FALLBACK_MODEL}...`);
+        try {
+          return await runModel(FALLBACK_MODEL);
+        } catch {
+          throw retryErr;
+        }
+      }
+    }
+
+    throw err;
+  }
 }
 
 /* ==========================================================================
@@ -507,7 +534,7 @@ async function handleAnalyze(req: Request, res: Response) {
     });
   } catch (error: any) {
     const errorMsg = error?.message || String(error);
-    console.warn('[VisionAssist AI] Inference error:', errorMsg);
+    console.warn('[VisionAssist AI] Inference notice:', errorMsg.slice(0, 150));
 
     const isKeyError =
       errorMsg.includes('API key not valid') ||
@@ -521,6 +548,25 @@ async function handleAnalyze(req: Request, res: Response) {
       errorMsg.includes('RESOURCE_EXHAUSTED') ||
       errorMsg.includes('quota');
 
+    const isOverloaded =
+      errorMsg.includes('503') ||
+      errorMsg.includes('high demand') ||
+      errorMsg.includes('UNAVAILABLE') ||
+      errorMsg.includes('overloaded');
+
+    // Extract retry delay from error if present (e.g. "retry in 6.68s" or "retry in 500ms")
+    let retryAfterMs = 0;
+    if (isQuotaError || isOverloaded) {
+      const matchDelay = errorMsg.match(/retry in ([0-9.]+)s/i) || errorMsg.match(/retry in ([0-9.]+)ms/i);
+      if (matchDelay) {
+        const val = parseFloat(matchDelay[1]);
+        retryAfterMs = errorMsg.toLowerCase().includes('ms') ? Math.ceil(val) : Math.ceil(val * 1000);
+      } else {
+        retryAfterMs = isQuotaError ? 6000 : 3500;
+      }
+      retryAfterMs = Math.max(retryAfterMs, 3000);
+    }
+
     let ttsMessage = isRu ? 'Путь свободен.' : 'Path clear.';
     let hazardType = 'CLEAR';
 
@@ -531,30 +577,40 @@ async function handleAnalyze(req: Request, res: Response) {
       hazardType = 'API_KEY_ERROR';
     } else if (isQuotaError) {
       ttsMessage = isRu
-        ? 'Превышен лимит запросов Gemini API. Укажите персональный ключ в настройках.'
-        : 'Gemini API quota exceeded. Enter your personal key in settings.';
+        ? 'Превышен лимит запросов Gemini API. Пауза несколько секунд, или укажите личный ключ.'
+        : 'Gemini API quota rate limit. Pausing a few seconds, or enter personal key in settings.';
       hazardType = 'QUOTA_ERROR';
+    } else if (isOverloaded) {
+      ttsMessage = isRu
+        ? 'Сервер нейросети временно перегружен, ожидание стабилизации...'
+        : 'AI server temporarily busy, pausing for stabilization...';
+      hazardType = 'SERVER_BUSY';
     }
 
     res.json({
       success: true,
       hasKey: !isKeyError,
+      retryAfterMs,
       analysis: {
         ttsMessage,
-        hazardLevel: isKeyError || isQuotaError ? 2 : 0,
+        hazardLevel: isKeyError ? 2 : 0,
         hazardType,
         clockDirection: '12',
         distanceMeters: 0,
         distanceText: isKeyError ? (isRu ? 'ошибка ключа' : 'key error') : (isRu ? 'чисто' : 'clear'),
         verticalZone: 'GENERAL',
-        clipContext: isKeyError ? 'Требуется API ключ' : 'Окружающее пространство',
-        suggestedAction: isKeyError || isQuotaError ? 'CHECK_CAMERA' : 'CONTINUE',
-        shouldSpeak: isKeyError || isQuotaError,
+        clipContext: isKeyError
+          ? 'Требуется API ключ'
+          : isQuotaError
+          ? 'Лимит запросов'
+          : 'Окружающее пространство',
+        suggestedAction: isKeyError ? 'CHECK_CAMERA' : 'CONTINUE',
+        shouldSpeak: isKeyError, // Only vocalize critical key errors, don't spam audio on temporary rate limits
         detectedObjects: [],
       },
       timestamp: Date.now(),
       fallbackEngaged: true,
-      debugError: errorMsg,
+      debugError: errorMsg.slice(0, 200),
     });
   }
 }
