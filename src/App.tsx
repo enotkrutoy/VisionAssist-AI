@@ -44,6 +44,19 @@ export default function App() {
   const [isListening, setIsListening] = useState<boolean>(false);
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [hasServerOrCustomKey, setHasServerOrCustomKey] = useState<boolean>(true);
+  const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
+
+  // Monitor network online/offline state
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   const [masterSoundEnabled, setMasterSoundEnabled] = useState<boolean>(true);
   const [isHelpOpen, setIsHelpOpen] = useState<boolean>(false);
@@ -512,6 +525,9 @@ export default function App() {
         onToggleTorch={() => setIsTorchOn(!isTorchOn)}
         lang={lang}
         onToggleLang={handleToggleLang}
+        isAnalyzing={isAnalyzing}
+        isOnline={isOnline}
+        hasServerOrCustomKey={hasServerOrCustomKey}
       />
 
       {/* Key Missing Banner on Vercel */}

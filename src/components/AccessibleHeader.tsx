@@ -14,6 +14,9 @@ interface AccessibleHeaderProps {
   onToggleTorch: () => void;
   lang: 'en' | 'ru';
   onToggleLang: () => void;
+  isAnalyzing?: boolean;
+  isOnline?: boolean;
+  hasServerOrCustomKey?: boolean;
 }
 
 export const AccessibleHeader: React.FC<AccessibleHeaderProps> = ({
@@ -26,25 +29,78 @@ export const AccessibleHeader: React.FC<AccessibleHeaderProps> = ({
   onToggleTorch,
   lang,
   onToggleLang,
+  isAnalyzing = false,
+  isOnline = true,
+  hasServerOrCustomKey = true,
 }) => {
   const isRu = lang === 'ru';
 
   return (
     <header className="flex flex-col md:flex-row items-center justify-between gap-4 py-4 px-6 border-b-2 border-[#FFEE00] bg-black sticky top-0 z-40">
-      {/* Brand & Subtitle */}
+      {/* Brand, Subtitle & Live Status Indicator */}
       <div className="flex items-center gap-3.5 w-full md:w-auto justify-between md:justify-start">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 rounded-2xl bg-[#FFEE00] text-black flex items-center justify-center font-extrabold shadow-md">
             <Eye className="w-7 h-7 stroke-[2.5]" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-xl font-black tracking-tight text-white">
                 VisionAssist AI
               </h1>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#FFEE00] text-black uppercase font-black">
                 WCAG AAA
               </span>
+
+              {/* Status Indicator (Онлайн / Офлайн / Анализ с миганием зеленым) */}
+              <div
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-mono font-black tracking-wide transition-colors ${
+                  isAnalyzing
+                    ? 'bg-emerald-950/90 border-emerald-400 text-emerald-300'
+                    : !isOnline
+                    ? 'bg-red-950/90 border-red-500 text-red-300'
+                    : !hasServerOrCustomKey
+                    ? 'bg-amber-950/90 border-amber-400 text-amber-300'
+                    : 'bg-zinc-900 border-zinc-700 text-emerald-400'
+                }`}
+                title={
+                  isAnalyzing
+                    ? isRu ? 'Идет активный нейросетевой анализ кадра' : 'Active neural inference in progress'
+                    : !isOnline
+                    ? isRu ? 'Сеть недоступна' : 'Network offline'
+                    : !hasServerOrCustomKey
+                    ? isRu ? 'Требуется API ключ' : 'API key required'
+                    : isRu ? 'Подключение к API стабильно' : 'API connected & ready'
+                }
+                role="status"
+                aria-live="polite"
+              >
+                <span className="relative flex h-2.5 w-2.5">
+                  {isAnalyzing && (
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-80" />
+                  )}
+                  <span
+                    className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                      isAnalyzing
+                        ? 'bg-emerald-400 animate-pulse'
+                        : !isOnline
+                        ? 'bg-red-500'
+                        : !hasServerOrCustomKey
+                        ? 'bg-amber-400'
+                        : 'bg-emerald-500'
+                    }`}
+                  />
+                </span>
+                <span className="uppercase text-[10px] tracking-wider">
+                  {isAnalyzing
+                    ? isRu ? 'АНАЛИЗ...' : 'ANALYZING...'
+                    : !isOnline
+                    ? isRu ? 'ОФЛАЙН' : 'OFFLINE'
+                    : !hasServerOrCustomKey
+                    ? isRu ? 'НЕТ КЛЮЧА' : 'NO KEY'
+                    : isRu ? 'ОНЛАЙН' : 'ONLINE'}
+                </span>
+              </div>
             </div>
             <p className="text-xs text-[#FFEE00] font-bold">
               {isRu

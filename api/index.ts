@@ -646,16 +646,18 @@ function handleHealth(_req: Request, res: Response) {
 
 app.post(['/api/analyze', '/analyze'], handleAnalyze);
 app.post(['/api/tts', '/tts'], handleTts);
-app.get(['/api/health', '/health', '/api'], handleHealth);
+app.get(['/api/health', '/health'], handleHealth);
 
+// Safe fallback middleware for Vercel serverless rewritten paths only
 app.use((req: Request, res: Response, next: any) => {
-  if (req.method === 'POST' && req.url.includes('analyze')) {
+  const url = req.originalUrl || req.url || '';
+  if (req.method === 'POST' && (url.startsWith('/api/analyze') || url.startsWith('/analyze'))) {
     return handleAnalyze(req, res);
   }
-  if (req.method === 'POST' && req.url.includes('tts')) {
+  if (req.method === 'POST' && (url.startsWith('/api/tts') || url.startsWith('/tts'))) {
     return handleTts(req, res);
   }
-  if (req.method === 'GET' && (req.url.includes('health') || req.url === '/' || req.url === '/api')) {
+  if (req.method === 'GET' && (url.startsWith('/api/health') || url.startsWith('/health'))) {
     return handleHealth(req, res);
   }
   next();
